@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  CONTAINER_ENV_VARS,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -16,6 +17,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -93,6 +95,16 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
+
+    // Global memory directory (shared personality/instructions)
+    const globalDirMain = path.join(GROUPS_DIR, 'global');
+    if (fs.existsSync(globalDirMain)) {
+      mounts.push({
+        hostPath: globalDirMain,
+        containerPath: '/workspace/global',
+        readonly: true,
+      });
+    }
   } else {
     // Other groups only get their own folder
     mounts.push({
@@ -236,6 +248,19 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass through application env vars explicitly listed in CONTAINER_ENV_VARS.
+  // Values are read directly from .env, never from process.env, to avoid
+  // accidentally exposing vars that were set in the shell environment.
+  if (CONTAINER_ENV_VARS.length > 0) {
+    const passthroughVals = readEnvFile(CONTAINER_ENV_VARS);
+    for (const key of CONTAINER_ENV_VARS) {
+      const value = passthroughVals[key];
+      if (value !== undefined) {
+        args.push('-e', `${key}=${value}`);
+      }
+    }
   }
 
   // Runtime-specific args for host gateway resolution

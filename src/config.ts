@@ -6,7 +6,12 @@ import { readEnvFile } from './env.js';
 // Read config values from .env (falls back to process.env).
 // Secrets (API keys, tokens) are NOT read here — they are loaded only
 // by the credential proxy (credential-proxy.ts), never exposed to containers.
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+// Exception: vars listed in CONTAINER_ENV_VARS are explicitly passed to containers.
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'CONTAINER_ENV_VARS',
+]);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
@@ -71,3 +76,12 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Comma-separated list of .env var names to pass through to containers.
+// Example: CONTAINER_ENV_VARS=TODOIST_API_TOKEN,MY_OTHER_API_KEY
+const containerEnvVarsConfig =
+  process.env.CONTAINER_ENV_VARS || envConfig.CONTAINER_ENV_VARS || '';
+export const CONTAINER_ENV_VARS: string[] = containerEnvVarsConfig
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);

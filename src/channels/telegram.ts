@@ -1,8 +1,12 @@
+import fs from 'fs';
 import https from 'https';
+import path from 'path';
+
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -39,6 +43,32 @@ async function sendTelegramMessage(
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
+}
+
+/**
+ * Download a file from Telegram's servers into destPath.
+ * Uses getFile to resolve the file_id to a download URL first.
+ */
+async function downloadTelegramFile(
+  token: string,
+  fileId: string,
+  destPath: string,
+): Promise<void> {
+  const infoRes = await fetch(
+    `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`,
+  );
+  const info = (await infoRes.json()) as {
+    ok: boolean;
+    result?: { file_path?: string };
+  };
+  if (!info.ok || !info.result?.file_path) {
+    throw new Error(`Telegram getFile failed for fileId ${fileId}`);
+  }
+  const dlRes = await fetch(
+    `https://api.telegram.org/file/bot${token}/${info.result.file_path}`,
+  );
+  if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status}`);
+  fs.writeFileSync(destPath, Buffer.from(await dlRes.arrayBuffer()));
 }
 
 export class TelegramChannel implements Channel {
@@ -199,7 +229,42 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+
+      // Attempt to download the best-quality photo into the group folder
+      if (group) {
+        const bestPhoto = ctx.message.photo[ctx.message.photo.length - 1];
+        const mediaDir = path.join(
+          resolveGroupFolderPath(group.folder),
+          'media',
+        );
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const filename = `photo_${ctx.message.message_id}_${Date.now()}.jpg`;
+        const destPath = path.join(mediaDir, filename);
+        try {
+          await downloadTelegramFile(
+            this.botToken,
+            bestPhoto.file_id,
+            destPath,
+          );
+          const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+          storeNonText(
+            ctx,
+            `[Photo: /workspace/group/media/${filename}]${caption}`,
+          );
+          return;
+        } catch (err) {
+          logger.warn(
+            { err },
+            'Failed to download Telegram photo, falling back to placeholder',
+          );
+        }
+      }
+
+      storeNonText(ctx, '[Photo]');
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
